@@ -1,5 +1,5 @@
-ner_system = """Your task is to extract named entities from the given paragraph. 
-Respond with a JSON list of entities.
+ner_system = """你的任务是从给定的段落中提取命名实体。
+请以JSON格式返回实体列表。
 """
 
 one_shot_ner_paragraph = """Radio City

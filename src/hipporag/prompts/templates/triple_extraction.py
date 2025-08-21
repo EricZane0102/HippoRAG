@@ -1,18 +1,18 @@
 from .ner import one_shot_ner_paragraph, one_shot_ner_output
 from ...utils.llm_utils import convert_format_to_template
 
-ner_conditioned_re_system = """Your task is to construct an RDF (Resource Description Framework) graph from the given passages and named entity lists. 
-Respond with a JSON list of triples, with each triple representing a relationship in the RDF graph. 
+ner_conditioned_re_system = """你的任务是根据给定的段落和命名实体列表构建RDF（资源描述框架）知识图谱。
+请返回JSON格式的三元组列表，每个三元组表示图中的一个关系。
 
-Pay attention to the following requirements:
-- Each triple should contain at least one, but preferably two, of the named entities in the list for each passage.
-- Clearly resolve pronouns to their specific names to maintain clarity.
+注意以下要求：
+- 每个三元组应至少包含一个，最好包含两个来自实体列表的命名实体。
+- 明确解析代词为具体名称以保持清晰度。
 
 """
 
 
-ner_conditioned_re_frame = """Convert the paragraph into a JSON dict, it has a named entity list and a triple list.
-Paragraph:
+ner_conditioned_re_frame = """将段落转换为JSON字典，包含命名实体列表和三元组列表。
+段落：
 ```
 {passage}
 ```

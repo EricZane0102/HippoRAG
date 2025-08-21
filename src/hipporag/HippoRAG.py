@@ -822,7 +822,7 @@ class HippoRAG:
             prompt_user = ''
             for passage in retrieved_passages:
                 prompt_user += f'Wikipedia Title: {passage}\n\n'
-            prompt_user += 'Question: ' + query_solution.question + '\nThought: '
+            prompt_user += '问题: ' + query_solution.question + '\n思考过程: '
 
             if self.prompt_template_manager.is_template_name_valid(name=f'rag_qa_{self.global_config.dataset}'):
                 # find the corresponding prompt for this dataset
@@ -845,7 +845,14 @@ class HippoRAG:
         for query_solution_idx, query_solution in tqdm(enumerate(queries), desc="Extraction Answers from LLM Response"):
             response_content = all_response_message[query_solution_idx]
             try:
-                pred_ans = response_content.split('Answer:')[1].strip()
+                # 支持中英文答案分隔符
+                if '答案:' in response_content:
+                    pred_ans = response_content.split('答案:')[1].strip()
+                elif 'Answer:' in response_content:
+                    pred_ans = response_content.split('Answer:')[1].strip()
+                else:
+                    # 如果都没有找到，尝试查找最后一个句号后的内容作为答案
+                    pred_ans = response_content.strip()
             except Exception as e:
                 logger.warning(f"Error in parsing the answer from the raw LLM QA inference response: {str(e)}!")
                 pred_ans = response_content

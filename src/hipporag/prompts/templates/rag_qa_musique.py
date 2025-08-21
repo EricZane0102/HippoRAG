@@ -12,30 +12,30 @@ one_shot_rag_qa_docs = (
 
 one_shot_ircot_demo = (
     f'{one_shot_rag_qa_docs}'
-    '\n\nQuestion: '
+    '\n\n问题: '
     f"When was Neville A. Stanton's employer founded?"
-    '\nThought: '
-    f"The employer of Neville A. Stanton is University of Southampton. The University of Southampton was founded in 1862. So the answer is: 1862."
+    '\n思考过程: '
+    f"Neville A. Stanton的雇主是南安普顿大学。南安普顿大学成立于1862年。所以答案是：1862。"
     '\n\n'
 )
 
 
 rag_qa_system = (
-    'As an advanced reading comprehension assistant, your task is to analyze text passages and corresponding questions meticulously. '
-    'Your response start after "Thought: ", where you will methodically break down the reasoning process, illustrating how you arrive at conclusions. '
-    'Conclude with "Answer: " to present a concise, definitive response, devoid of additional elaborations.'
+    '作为高级阅读理解助手，你需要仔细分析文本段落和对应问题。'
+    '请在"思考过程："之后详细说明推理过程，展示如何得出结论。'
+    '最后以"答案："呈现简洁明确的回答，不需要额外的阐述。'
 )
 
 one_shot_rag_qa_input = (
     f"{one_shot_rag_qa_docs}"
-    "\n\nQuestion: "
+    "\n\n问题: "
     "When was Neville A. Stanton's employer founded?"
-    '\nThought: '
+    '\n思考过程: '
 )
 
 one_shot_rag_qa_output = (
-    "The employer of Neville A. Stanton is University of Southampton. The University of Southampton was founded in 1862. "
-    "\nAnswer: 1862."
+    "Neville A. Stanton的雇主是南安普顿大学。南安普顿大学成立于1862年。"
+    "\n答案: 1862"
 )
 
 

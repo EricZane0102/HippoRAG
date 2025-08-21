@@ -10,15 +10,15 @@ one_shot_ircot_demo_docs = (
 
 one_shot_ircot_demo = (
     f'{one_shot_ircot_demo_docs}'
-    '\n\nQuestion: '
+    '\n\n问题: '
     f"When was Neville A. Stanton's employer founded?"
-    '\nThought: '
-    f"The employer of Neville A. Stanton is University of Southampton. The University of Southampton was founded in 1862. So the answer is: 1862."
+    '\n思考过程: '
+    f"Neville A. Stanton的雇主是南安普顿大学。南安普顿大学成立于1862年。所以答案是：1862。"
     '\n\n'
 )
 
 ircot_system = (
-    'You serve as an intelligent assistant, adept at facilitating users through complex, multi-hop reasoning across multiple documents. This task is illustrated through demonstrations, each consisting of a document set paired with a relevant question and its multi-hop reasoning thoughts. Your task is to generate one thought for current step, DON\'T generate the whole thoughts at once! If you reach what you believe to be the final step, start with "So the answer is:".'
+    '你是一个智能助手，擅长帮助用户通过多个文档进行复杂的多跳推理。这个任务通过演示来说明，每个演示包含一组文档以及相关问题和多跳推理思考过程。你的任务是为当前步骤生成一个思考过程，不要一次性生成所有的思考过程！如果你认为已经到达最终步骤，请以"所以答案是："开始。'
     '\n\n'
     f'{one_shot_ircot_demo}'
 )

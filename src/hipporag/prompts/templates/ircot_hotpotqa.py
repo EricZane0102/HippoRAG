@@ -9,15 +9,15 @@ one_shot_ircot_demo_docs = (
 
 one_shot_ircot_demo = (
     f'{one_shot_ircot_demo_docs}'
-    '\n\nQuestion: '
+    '\n\n问题: '
     f"Nobody Loves You was written by John Lennon and released on what album that was issued by Apple Records, and was written, recorded, and released during his 18 month separation from Yoko Ono?"
-    '\nThought: '
-    f"The album issued by Apple Records, and written, recorded, and released during John Lennon's 18 month separation from Yoko Ono is Walls and Bridges. Nobody Loves You was written by John Lennon on Walls and Bridges album. So the answer is: Walls and Bridges."
+    '\n思考过程: '
+    f"由Apple Records发行，在John Lennon与Yoko Ono分居18个月期间创作、录制和发行的专辑是Walls and Bridges。Nobody Loves You是John Lennon在Walls and Bridges专辑中创作的。所以答案是：Walls and Bridges。"
     '\n\n'
 )
 
 ircot_system = (
-    'You serve as an intelligent assistant, adept at facilitating users through complex, multi-hop reasoning across multiple documents. This task is illustrated through demonstrations, each consisting of a document set paired with a relevant question and its multi-hop reasoning thoughts. Your task is to generate one thought for current step, DON\'T generate the whole thoughts at once! If you reach what you believe to be the final step, start with "So the answer is:".'
+    '你是一个智能助手，擅长帮助用户通过多个文档进行复杂的多跳推理。这个任务通过演示来说明，每个演示包含一组文档以及相关问题和多跳推理思考过程。你的任务是为当前步骤生成一个思考过程，不要一次性生成所有的思考过程！如果你认为已经到达最终步骤，请以"所以答案是："开始。'
     '\n\n'
     f'{one_shot_ircot_demo}'
 )
