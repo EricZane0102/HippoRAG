@@ -22,6 +22,7 @@ from .embedding_model import _get_embedding_model_class, BaseEmbeddingModel
 from .embedding_store import EmbeddingStore
 from .information_extraction import OpenIE
 from .information_extraction.openie_vllm_offline import VLLMOfflineOpenIE
+from .information_extraction.table_extractor import TableTripleExtractor
 from .evaluation.retrieval_eval import RetrievalRecall
 from .evaluation.qa_eval import QAExactMatch, QAF1Score
 from .prompts.linking import get_query_instruction
@@ -125,8 +126,12 @@ class HippoRAG:
 
         if self.global_config.openie_mode == 'online':
             self.openie = OpenIE(llm_model=self.llm_model)
+            # 初始化表格三元组提取器
+            self.table_extractor = TableTripleExtractor(llm_model=self.llm_model)
         elif self.global_config.openie_mode == 'offline':
             self.openie = VLLMOfflineOpenIE(self.global_config)
+            # offline模式暂不支持表格提取
+            self.table_extractor = None
 
         self.graph = self.initialize_graph()
 
@@ -271,6 +276,133 @@ class HippoRAG:
             logger.info(f"Found {num_new_chunks} new chunks to save into graph.")
             self.add_synonymy_edges()
 
+            self.augment_graph()
+            self.save_igraph()
+
+    def index_with_tables(self, docs: List[str], content_types: List[str]):
+        """
+        索引包含表格的文档。根据content_type区分文本和表格段落进行不同处理。
+        
+        Parameters:
+            docs : List[str]
+                文档内容列表
+            content_types : List[str] 
+                对应的内容类型列表，'text'为文本，'table'为表格
+        """
+        
+        if len(docs) != len(content_types):
+            raise ValueError("docs和content_types长度必须一致")
+            
+        logger.info(f"索引包含表格的文档: 文本段落 {content_types.count('text')} 个, 表格段落 {content_types.count('table')} 个")
+        
+        # 分离文本和表格内容
+        text_docs = []
+        table_docs = []
+        text_indices = []
+        table_indices = []
+        
+        for i, (doc, content_type) in enumerate(zip(docs, content_types)):
+            if content_type == 'text':
+                text_docs.append(doc)
+                text_indices.append(i)
+            elif content_type == 'table':
+                table_docs.append(doc)
+                table_indices.append(i)
+        
+        # 先处理文本段落（使用现有流程）
+        if text_docs:
+            logger.info(f"处理文本段落...")
+            self.chunk_embedding_store.insert_strings(text_docs)
+            chunk_to_rows = self.chunk_embedding_store.get_all_id_to_rows()
+            
+            all_openie_info, chunk_keys_to_process = self.load_existing_openie(chunk_to_rows.keys())
+            new_openie_rows = {k : chunk_to_rows[k] for k in chunk_keys_to_process}
+            
+            text_triple_results_dict = {}
+            if len(chunk_keys_to_process) > 0:
+                new_ner_results_dict, new_triple_results_dict = self.openie.batch_openie(new_openie_rows)
+                self.merge_openie_results(all_openie_info, new_openie_rows, new_ner_results_dict, new_triple_results_dict)
+                ner_results_dict, text_triple_results_dict = reformat_openie_results(all_openie_info)
+        
+        # 处理表格段落（使用新的表格提取器）
+        table_triple_results_dict = {}
+        if table_docs and self.table_extractor is not None:
+            logger.info(f"处理表格段落...")
+
+            # 一次性将表格插入 chunk 存储，减少频繁写入
+            self.chunk_embedding_store.insert_strings(table_docs)
+
+            # 组装批处理输入，带 chunk_id 以便后续合并
+            table_infos = []
+            for i, table_doc in enumerate(table_docs):
+                table_chunk_id = self.chunk_embedding_store.get_hash_id(table_doc)
+                table_infos.append({
+                    'content': table_doc,
+                    'context': f"表格段落 {table_indices[i]+1}",
+                    'content_type': 'table',
+                    'chunk_id': table_chunk_id
+                })
+
+            # 读取并发配置（若未配置则走默认值）
+            max_workers = getattr(self.global_config, 'table_extraction_max_workers', 4)
+            show_progress = getattr(self.global_config, 'table_progress_bar', True)
+
+            # 并发批量提取
+            batch_results = self.table_extractor.extract_batch_tables(
+                table_infos=table_infos,
+                max_workers=max_workers,
+                show_progress=show_progress
+            )
+
+            # 收集结果到字典
+            for res in batch_results:
+                table_triple_results_dict[res.chunk_id] = res
+        
+        # 合并文本和表格的处理结果
+        combined_triple_results = {}
+        combined_triple_results.update(text_triple_results_dict)
+        combined_triple_results.update(table_triple_results_dict)
+        
+        if not combined_triple_results:
+            logger.warning("没有成功提取到任何三元组")
+            return
+            
+        # 获取所有chunk信息
+        all_chunk_to_rows = self.chunk_embedding_store.get_all_id_to_rows()
+        chunk_ids = list(combined_triple_results.keys())
+        
+        # 处理三元组数据
+        chunk_triples = []
+        for chunk_id in chunk_ids:
+            if hasattr(combined_triple_results[chunk_id], 'triples'):
+                # 表格三元组结果
+                triples = [text_processing(list(t)) for t in combined_triple_results[chunk_id].triples]
+            else:
+                # 文本三元组结果
+                triples = [text_processing(t) for t in combined_triple_results[chunk_id].triples]
+            chunk_triples.append(triples)
+        
+        entity_nodes, chunk_triple_entities = extract_entity_nodes(chunk_triples)
+        facts = flatten_facts(chunk_triples)
+        
+        logger.info(f"编码实体: {len(entity_nodes)} 个")
+        self.entity_embedding_store.insert_strings(entity_nodes)
+        
+        logger.info(f"编码事实: {len(facts)} 个")
+        self.fact_embedding_store.insert_strings([str(fact) for fact in facts])
+        
+        logger.info(f"构建知识图谱")
+        
+        self.node_to_node_stats = {}
+        self.ent_node_to_chunk_ids = {}
+        
+        self.add_fact_edges(chunk_ids, chunk_triples)
+        num_new_chunks = self.add_passage_edges(chunk_ids, chunk_triple_entities)
+        
+        if num_new_chunks > 0:
+            logger.info(f"发现 {num_new_chunks} 个新chunk，保存到图中")
+            self.add_synonymy_edges()
+            
             self.augment_graph()
             self.save_igraph()
 

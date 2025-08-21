@@ -166,7 +166,23 @@ class BaseConfig:
         metadata={"help": "Whether the graph is directed or not."}
     )
     
-    
+    # Table processing specific attributes
+    enable_table_processing: bool = field(
+        default=True,
+        metadata={"help": "Whether to enable table processing capabilities."}
+    )
+    table_extraction_temperature: float = field(
+        default=0.1,
+        metadata={"help": "Temperature for LLM when extracting triples from tables."}
+    )
+    table_extraction_max_tokens: int = field(
+        default=8000,
+        metadata={"help": "Maximum tokens for table extraction LLM calls."}
+    )
+    table_extraction_max_workers: int = field(
+        default=32,
+        metadata={"help": "Maximum number of workers for table extraction."}
+    )
     
     # Retrieval specific attributes
     linking_top_k: int = field(

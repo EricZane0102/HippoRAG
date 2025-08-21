@@ -1,142 +1,195 @@
 import os
 from typing import List
 import json
-
-from src.hipporag.HippoRAG import HippoRAG
-from src.hipporag.utils.misc_utils import string_to_bool
-from src.hipporag.utils.config_utils import BaseConfig
-
 import argparse
-
-# os.environ["LOG_LEVEL"] = "DEBUG"
-os.environ["CUDA_DEVICE_ORDER"] = "PCI_BUS_ID"
-os.environ["TOKENIZERS_PARALLELISM"] = "false"
-
 import logging
+import requests
+from typing import Optional, Dict
+import csv
+import logging
+import re
 
-def get_gold_docs(samples: List, dataset_name: str = None) -> List:
-    gold_docs = []
-    for sample in samples:
-        if 'supporting_facts' in sample:  # hotpotqa, 2wikimultihopqa
-            gold_title = set([item[0] for item in sample['supporting_facts']])
-            gold_title_and_content_list = [item for item in sample['context'] if item[0] in gold_title]
-            if dataset_name.startswith('hotpotqa'):
-                gold_doc = [item[0] + '\n' + ''.join(item[1]) for item in gold_title_and_content_list]
-            else:
-                gold_doc = [item[0] + '\n' + ' '.join(item[1]) for item in gold_title_and_content_list]
-        elif 'contexts' in sample:
-            gold_doc = [item['title'] + '\n' + item['text'] for item in sample['contexts'] if item['is_supporting']]
+from src.hipporag import HippoRAG
+
+os.environ['OPENAI_API_KEY'] = 'sk-6a44d15e56dd4007945ccc41b97b499c'
+os.environ['CUDA_VISIBLE_DEVICES'] = '0,1,2,3,4,5,6,7'
+
+test_questions = "test_questions/questions_test.txt"
+output_file = "zycx/hipporag_results.csv"
+
+logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')
+logger = logging.getLogger(__name__)
+
+def load_test_questions(file_path: str) -> List[str]:
+    """从文件中加载测试问题"""
+    questions = []
+    with open(file_path, 'r', encoding='utf-8') as f:
+        content = f.read()
+        # 提取问题（包含数字后跟句号的行）
+        lines = content.split('\n')
+        for line in lines:
+            line = line.strip()
+            if re.match(r'^\d+\.\s+', line):
+                # 移除数字前缀
+                line = re.sub(r'^\d+\.\s+', '', line)
+            if line:
+                questions.append(line)
+                # 清洗内容
+                # cleaned_line = clean_content(line)
+                # if cleaned_line:
+                #     questions.append(cleaned_line)
+    
+    return questions
+
+def generate_csv_data(query_solutions: List[Dict], qa_top_k: int) -> List[Dict]:
+    """生成CSV数据"""
+    csv_data = []
+    
+    for i, query_solution in enumerate(query_solutions, 1):
+        query_id = f"query_{i}"
+        question = query_solution.question
+        answer = query_solution.answer
+        docs = query_solution.docs
+        
+        # 过滤掉空资源
+        valid_resources = []
+        for resource in docs:
+            if resource.strip():
+                valid_resources.append(resource)
+        # 只保留前qa_top_k个检索文档
+        valid_resources = valid_resources[:qa_top_k]
+        
+        if not valid_resources:
+            # 如果没有有效的检索资源，创建一个包含最小段落的单行
+            csv_data.append({
+                'query_id': query_id,
+                'query': question,
+                'query_run': 1,
+                'passage_id': '[1]',
+                'passage': 'No relevant passages found.',
+                'generated_answer': answer
+            })
         else:
-            assert 'paragraphs' in sample, "`paragraphs` should be in sample, or consider the setting not to evaluate retrieval"
-            gold_paragraphs = []
-            for item in sample['paragraphs']:
-                if 'is_supporting' in item and item['is_supporting'] is False:
-                    continue
-                gold_paragraphs.append(item)
-            gold_doc = [item['title'] + '\n' + (item['text'] if 'text' in item else item['paragraph_text']) for item in gold_paragraphs]
+            # 为每个有效的检索资源创建多行
+            for j, resource in enumerate(valid_resources, 1):
+                
+                csv_data.append({
+                    'query_id': query_id,
+                    'query': question,
+                    'query_run': 1,
+                    'passage_id': f'[{j}]',
+                    'passage': resource,
+                    'generated_answer': answer if j == 1 else ''
+                })
+    
+    return csv_data
 
-        gold_doc = list(set(gold_doc))
-        gold_docs.append(gold_doc)
-    return gold_docs
-
-
-def get_gold_answers(samples):
-    gold_answers = []
-    for sample_idx in range(len(samples)):
-        gold_ans = None
-        sample = samples[sample_idx]
-
-        if 'answer' in sample or 'gold_ans' in sample:
-            gold_ans = sample['answer'] if 'answer' in sample else sample['gold_ans']
-        elif 'reference' in sample:
-            gold_ans = sample['reference']
-        elif 'obj' in sample:
-            gold_ans = set(
-                [sample['obj']] + [sample['possible_answers']] + [sample['o_wiki_title']] + [sample['o_aliases']])
-            gold_ans = list(gold_ans)
-        assert gold_ans is not None
-        if isinstance(gold_ans, str):
-            gold_ans = [gold_ans]
-        assert isinstance(gold_ans, list)
-        gold_ans = set(gold_ans)
-        if 'answer_aliases' in sample:
-            gold_ans.update(sample['answer_aliases'])
-
-        gold_answers.append(gold_ans)
-
-    return gold_answers
+def save_to_csv(csv_data: List[Dict], output_file: str):
+    """将数据保存到CSV文件"""
+    # 确保字段顺序正确
+    fieldnames = ['query_id', 'query', 'query_run', 'passage_id', 'passage', 'generated_answer']
+    
+    with open(output_file, 'w', newline='', encoding='utf-8') as csvfile:
+        writer = csv.DictWriter(csvfile, fieldnames=fieldnames)
+        writer.writeheader()
+        writer.writerows(csv_data)
 
 def main():
-    parser = argparse.ArgumentParser(description="HippoRAG retrieval and QA")
-    parser.add_argument('--dataset', type=str, default='musique', help='Dataset name')
-    parser.add_argument('--llm_base_url', type=str, default='https://api.openai.com/v1', help='LLM base URL')
-    parser.add_argument('--llm_name', type=str, default='gpt-4o-mini', help='LLM name')
-    parser.add_argument('--embedding_name', type=str, default='nvidia/NV-Embed-v2', help='embedding model name')
-    parser.add_argument('--force_index_from_scratch', type=str, default='false',
-                        help='If set to True, will ignore all existing storage files and graph data and will rebuild from scratch.')
-    parser.add_argument('--force_openie_from_scratch', type=str, default='false', help='If set to False, will try to first reuse openie results for the corpus if they exist.')
-    parser.add_argument('--openie_mode', choices=['online', 'offline'], default='online',
-                        help="OpenIE mode, offline denotes using VLLM offline batch mode for indexing, while online denotes")
-    parser.add_argument('--save_dir', type=str, default='outputs', help='Save directory')
-    args = parser.parse_args()
+    # result_volume_list = get_result_volume_list()
+    # for result_volume in result_volume_list:
+    #     if result_volume['name'] == result_volume_name:
+    #         result_volume_id = result_volume['id']
+    #         break
+    # sub_volume_list = get_sub_volume_list(result_volume_id)
+    # for sub_volume in sub_volume_list:
+    #     if sub_volume['name'] == sub_volume_name:
+    #         sub_volume_id = sub_volume['id']
+    #         break
+    # file_list = get_volume_files(sub_volume_id)
+    # for file in file_list:
+    #     file_id = file['id']
+    #     segments = get_file_segments(sub_volume_id, file_id)
+    #     print(segments)
+    # Prepare datasets and evaluation：通过 urls 列表拉取所有分段
+    docs: List[str] = []
+    content_types: List[str] = []
+    print(f"正在加载分段。。。")
+    with open("data/file_segments.json", "r") as f:
+        file_segments = json.load(f)["segments"]
+    for file_segment in file_segments:
+        docs.append(file_segment['content'])
+        content_types.append(file_segment['content_type'])
+    print("len(docs):", len(docs))
+    # docs = [
+    #     "Oliver Badman is a politician.",
+    #     "George Rankin is a politician.",
+    #     "Thomas Marwick is a politician.",
+    #     "Cinderella attended the royal ball.",
+    #     "The prince used the lost glass slipper to search the kingdom.",
+    #     "When the slipper fit perfectly, Cinderella was reunited with the prince.",
+    #     "Erik Hort's birthplace is Montebello.",
+    #     "Marina is bom in Minsk.",
+    #     "Montebello is a part of Rockland County."
+    # ]
 
-    dataset_name = args.dataset
-    save_dir = args.save_dir
-    llm_base_url = args.llm_base_url
-    llm_name = args.llm_name
-    if save_dir == 'outputs':
-        save_dir = save_dir + '/' + dataset_name
+    save_dir = 'outputs/openai'  # Define save directory for HippoRAG objects (each LLM/Embedding model combination will create a new subdirectory)
+    
+    llm_model_name = 'qwen-plus'
+    llm_base_url = "https://dashscope.aliyuncs.com/compatible-mode/v1/"
+    embedding_model_name = '/data/models/bge-m3'
+    
+    os.environ['PYTORCH_CUDA_ALLOC_CONF'] = 'expandable_segments:True'
+
+    # 创建配置以优化内存使用
+    from src.hipporag.utils.config_utils import BaseConfig
+    config = BaseConfig()
+    config.embedding_model_name = embedding_model_name
+    config.embedding_batch_size = 1  # 大幅减小批处理大小
+    config.embedding_max_seq_len = 4096  # 减小最大序列长度
+    # config.embedding_model_dtype = "float16"  # 使用半精度浮点数节省内存
+    config.retrieval_top_k = 200
+    config.qa_top_k = 5
+    config.table_extraction_max_workers = 32
+
+    # Startup a HippoRAG instance
+    hipporag = HippoRAG(save_dir=save_dir,
+                        llm_model_name=llm_model_name,
+                        llm_base_url=llm_base_url,
+                        embedding_model_name=embedding_model_name,
+                        global_config=config)
+
+    # Run indexing
+    # hipporag.index(docs=docs)
+    # Run indexing with table support
+    if hasattr(hipporag, 'index_with_tables'):
+        # 使用新的支持表格的索引方法
+        hipporag.index_with_tables(docs=docs, content_types=content_types)
     else:
-        save_dir = save_dir + '_' + dataset_name
+        # 降级到传统索引方法，仅处理文本
+        text_docs = [doc for doc, ctype in zip(docs, content_types) if ctype == 'text']
+        if text_docs:
+            hipporag.index(docs=text_docs)
+        else:
+            logger.warning("没有发现文本文档，且当前HippoRAG版本不支持表格处理")
 
-    corpus_path = f"reproduce/dataset/{dataset_name}_corpus.json"
-    with open(corpus_path, "r") as f:
-        corpus = json.load(f)
+    # Separate Retrieval & QA
+    # queries = [
+    #     "What is George Rankin's occupation?",
+    #     "How did Cinderella reach her happy ending?",
+    #     "What county is Erik Hort's birthplace a part of?"
+    # ]
+    questions = load_test_questions(test_questions)
 
-    docs = [f"{doc['title']}\n{doc['text']}" for doc in corpus]
-
-    force_index_from_scratch = string_to_bool(args.force_index_from_scratch)
-    force_openie_from_scratch = string_to_bool(args.force_openie_from_scratch)
-
-    # Prepare datasets and evaluation
-    samples = json.load(open(f"reproduce/dataset/{dataset_name}.json", "r"))
-    all_queries = [s['question'] for s in samples]
-
-    gold_answers = get_gold_answers(samples)
-    try:
-        gold_docs = get_gold_docs(samples, dataset_name)
-        assert len(all_queries) == len(gold_docs) == len(gold_answers), "Length of queries, gold_docs, and gold_answers should be the same."
-    except:
-        gold_docs = None
-
-    config = BaseConfig(
-        save_dir=save_dir,
-        llm_base_url=llm_base_url,
-        llm_name=llm_name,
-        dataset=dataset_name,
-        embedding_model_name=args.embedding_name,
-        force_index_from_scratch=force_index_from_scratch,  # ignore previously stored index, set it to False if you want to use the previously stored index and embeddings
-        force_openie_from_scratch=force_openie_from_scratch,
-        rerank_dspy_file_path="src/hipporag/prompts/dspy_prompts/filter_llama3.3-70B-Instruct.json",
-        retrieval_top_k=200,
-        linking_top_k=5,
-        max_qa_steps=3,
-        qa_top_k=5,
-        graph_type="facts_and_sim_passage_node_unidirectional",
-        embedding_batch_size=8,
-        max_new_tokens=None,
-        corpus_len=len(corpus),
-        openie_mode=args.openie_mode
-    )
-
-    logging.basicConfig(level=logging.INFO)
-
-    hipporag = HippoRAG(global_config=config)
-
-    hipporag.index(docs)
-
-    # Retrieval and QA
-    hipporag.rag_qa(queries=all_queries, gold_docs=gold_docs, gold_answers=gold_answers)
+    query_solutions, responses, metadata = hipporag.rag_qa(queries=questions)
+    
+    # for (query, solution, response, meta) in zip(questions, query_solutions, responses, metadata):
+    #     print(f"query: {query}")
+    #     print(f"solution: {solution[0]}")
+    #     print(f"response: {response}")
+    #     print(f"meta: {meta}")
+    #     print("-"*100)
+    csv_data = generate_csv_data(query_solutions, config.qa_top_k)
+    save_to_csv(csv_data, output_file)
 
 if __name__ == "__main__":
     main()
