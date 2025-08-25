@@ -23,6 +23,7 @@ from .embedding_store import EmbeddingStore
 from .information_extraction import OpenIE
 from .information_extraction.openie_vllm_offline import VLLMOfflineOpenIE
 from .information_extraction.table_extractor import TableTripleExtractor
+from .information_extraction.table_to_text_converter import TableToTextConverter
 from .evaluation.retrieval_eval import RetrievalRecall
 from .evaluation.qa_eval import QAExactMatch, QAF1Score
 from .prompts.linking import get_query_instruction
@@ -126,12 +127,23 @@ class HippoRAG:
 
         if self.global_config.openie_mode == 'online':
             self.openie = OpenIE(llm_model=self.llm_model)
-            # 初始化表格三元组提取器
-            self.table_extractor = TableTripleExtractor(llm_model=self.llm_model)
+            # 初始化表格处理器（根据配置选择处理模式）
+            if self.global_config.table_processing_mode == 'triple_extraction':
+                self.table_extractor = TableTripleExtractor(llm_model=self.llm_model)
+                self.table_to_text_converter = None
+            elif self.global_config.table_processing_mode == 'text_conversion':
+                self.table_extractor = None  # 不使用三元组提取
+                self.table_to_text_converter = TableToTextConverter(
+                    llm_model=self.llm_model,
+                    chunk_size=self.global_config.text_conversion_chunk_size,
+                    overlap=self.global_config.text_conversion_overlap,
+                    detail_level=self.global_config.text_conversion_detail_level
+                )
         elif self.global_config.openie_mode == 'offline':
             self.openie = VLLMOfflineOpenIE(self.global_config)
-            # offline模式暂不支持表格提取
+            # offline模式暂不支持表格处理
             self.table_extractor = None
+            self.table_to_text_converter = None
 
         self.graph = self.initialize_graph()
 
@@ -324,39 +336,94 @@ class HippoRAG:
                 self.merge_openie_results(all_openie_info, new_openie_rows, new_ner_results_dict, new_triple_results_dict)
                 ner_results_dict, text_triple_results_dict = reformat_openie_results(all_openie_info)
         
-        # 处理表格段落（使用新的表格提取器）
+        # 处理表格段落（根据配置选择处理模式）
         table_triple_results_dict = {}
-        if table_docs and self.table_extractor is not None:
-            logger.info(f"处理表格段落...")
-
-            # 一次性将表格插入 chunk 存储，减少频繁写入
-            self.chunk_embedding_store.insert_strings(table_docs)
-
-            # 组装批处理输入，带 chunk_id 以便后续合并
-            table_infos = []
-            for i, table_doc in enumerate(table_docs):
-                table_chunk_id = self.chunk_embedding_store.get_hash_id(table_doc)
-                table_infos.append({
-                    'content': table_doc,
-                    'context': f"表格段落 {table_indices[i]+1}",
-                    'content_type': 'table',
-                    'chunk_id': table_chunk_id
-                })
-
-            # 读取并发配置（若未配置则走默认值）
-            max_workers = getattr(self.global_config, 'table_extraction_max_workers', 4)
-            show_progress = getattr(self.global_config, 'table_progress_bar', True)
-
-            # 并发批量提取
-            batch_results = self.table_extractor.extract_batch_tables(
-                table_infos=table_infos,
-                max_workers=max_workers,
-                show_progress=show_progress
-            )
-
-            # 收集结果到字典
-            for res in batch_results:
-                table_triple_results_dict[res.chunk_id] = res
+        processed_table_chunks = []  # 存储转换后的文本chunks
+        
+        if table_docs:
+            if self.global_config.table_processing_mode == 'triple_extraction' and self.table_extractor is not None:
+                logger.info(f"使用三元组提取模式处理表格段落...")
+                
+                # 一次性将表格插入 chunk 存储，减少频繁写入
+                self.chunk_embedding_store.insert_strings(table_docs)
+                
+                # 组装批处理输入，带 chunk_id 以便后续合并
+                table_infos = []
+                for i, table_doc in enumerate(table_docs):
+                    table_chunk_id = self.chunk_embedding_store.get_hash_id(table_doc)
+                    table_infos.append({
+                        'content': table_doc,
+                        'context': f"表格段落 {table_indices[i]+1}",
+                        'content_type': 'table',
+                        'chunk_id': table_chunk_id
+                    })
+                
+                # 读取并发配置（若未配置则走默认值）
+                max_workers = getattr(self.global_config, 'table_extraction_max_workers', 4)
+                show_progress = getattr(self.global_config, 'table_progress_bar', True)
+                
+                # 并发批量提取
+                batch_results = self.table_extractor.extract_batch_tables(
+                    table_infos=table_infos,
+                    max_workers=max_workers,
+                    show_progress=show_progress
+                )
+                
+                # 收集结果到字典
+                for res in batch_results:
+                    table_triple_results_dict[res.chunk_id] = res
+                    
+            elif self.global_config.table_processing_mode == 'text_conversion' and self.table_to_text_converter is not None:
+                logger.info(f"使用文本转换模式处理表格段落...")
+                
+                # 组装表格转换输入
+                table_conversion_infos = []
+                for i, table_doc in enumerate(table_docs):
+                    table_conversion_infos.append({
+                        'content': table_doc,
+                        'context': f"表格段落 {table_indices[i]+1}",
+                        'content_type': 'table'
+                    })
+                
+                # 读取并发配置
+                max_workers = getattr(self.global_config, 'table_extraction_max_workers', 4)
+                show_progress = getattr(self.global_config, 'table_progress_bar', True)
+                
+                # 并发批量转换
+                conversion_results = self.table_to_text_converter.convert_batch_tables(
+                    table_infos=table_conversion_infos,
+                    max_workers=max_workers,
+                    show_progress=show_progress
+                )
+                
+                # 收集转换后的文本chunks
+                for result in conversion_results:
+                    if result.text_chunks:  # 只处理成功转换的结果
+                        processed_table_chunks.extend(result.text_chunks)
+                        logger.debug(f"表格转换生成 {len(result.text_chunks)} 个文本段落")
+                
+                # 将转换后的文本chunks当作普通文本处理
+                if processed_table_chunks:
+                    logger.info(f"处理 {len(processed_table_chunks)} 个表格转换文本段落...")
+                    self.chunk_embedding_store.insert_strings(processed_table_chunks)
+                    
+                    # 获取这些新chunks的信息
+                    # 首先获取所有chunk的rows信息
+                    chunk_to_rows = self.chunk_embedding_store.get_all_id_to_rows()
+                    new_chunk_to_rows = {}
+                    for text_chunk in processed_table_chunks:
+                        chunk_id = self.chunk_embedding_store.get_hash_id(text_chunk)
+                        if chunk_id in chunk_to_rows:
+                            new_chunk_to_rows[chunk_id] = chunk_to_rows[chunk_id]
+                    
+                    # 对转换后的文本进行OpenIE处理
+                    if len(new_chunk_to_rows) > 0:
+                        new_ner_results_dict, new_triple_results_dict = self.openie.batch_openie(new_chunk_to_rows)
+                        # 将结果合并到table_triple_results_dict中
+                        for chunk_id, triple_result in new_triple_results_dict.items():
+                            table_triple_results_dict[chunk_id] = triple_result
+            else:
+                logger.warning(f"表格处理模式 '{self.global_config.table_processing_mode}' 不支持或相应的处理器未初始化")
         
         # 合并文本和表格的处理结果
         combined_triple_results = {}
@@ -848,6 +915,8 @@ class HippoRAG:
                 # 支持中英文答案分隔符
                 if '答案:' in response_content:
                     pred_ans = response_content.split('答案:')[1].strip()
+                elif '答案：' in response_content:
+                    pred_ans = response_content.split('答案：')[1].strip()
                 elif 'Answer:' in response_content:
                     pred_ans = response_content.split('Answer:')[1].strip()
                 else:

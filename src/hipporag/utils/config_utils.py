@@ -171,6 +171,10 @@ class BaseConfig:
         default=True,
         metadata={"help": "Whether to enable table processing capabilities."}
     )
+    table_processing_mode: Literal["triple_extraction", "text_conversion"] = field(
+        default="triple_extraction",
+        metadata={"help": "Mode for processing tables: 'triple_extraction' for knowledge graph extraction, 'text_conversion' for converting tables to text descriptions."}
+    )
     table_extraction_temperature: float = field(
         default=0.1,
         metadata={"help": "Temperature for LLM when extracting triples from tables."}
@@ -182,6 +186,24 @@ class BaseConfig:
     table_extraction_max_workers: int = field(
         default=32,
         metadata={"help": "Maximum number of workers for table extraction."}
+    )
+    
+    # Table to text conversion specific attributes
+    text_conversion_chunk_size: int = field(
+        default=500,
+        metadata={"help": "Maximum number of characters per chunk when converting table descriptions to text segments."}
+    )
+    text_conversion_overlap: int = field(
+        default=50,
+        metadata={"help": "Number of characters to overlap between adjacent text chunks."}
+    )
+    text_conversion_detail_level: Literal["basic", "detailed"] = field(
+        default="detailed",
+        metadata={"help": "Level of detail in table text conversion: 'basic' for concise descriptions, 'detailed' for comprehensive analysis."}
+    )
+    text_conversion_temperature: float = field(
+        default=0.3,
+        metadata={"help": "Temperature for LLM when converting tables to text descriptions."}
     )
     
     # Retrieval specific attributes
