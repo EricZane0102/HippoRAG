@@ -18,3 +18,9 @@ boto3
 FlagEmbedding>=1.2.10
 langchain
 langchain-text-splitters
+
+# 语义分块相关依赖
+langchain-experimental
+langchain-openai
+langchain-community
+sentence-transformers

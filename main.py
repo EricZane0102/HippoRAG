@@ -136,6 +136,33 @@ def parse_args():
                        help='Path to test questions file')
     parser.add_argument('--output_file', type=str, default="zycx/hipporag_results.csv",
                        help='Output CSV file path')
+    parser.add_argument('--embedding_max_seq_len', type=int, default=4096,
+                       help='Max sequence length for the embedding model')
+    
+    # 语义分块相关参数
+    parser.add_argument('--enable_semantic_chunking', action='store_true', default=False,
+                       help='Enable semantic chunking for text processing')
+    parser.add_argument('--chunking_strategy', type=str, 
+                       choices=['semantic', 'fixed', 'adaptive'], default='fixed',
+                       help='Text chunking strategy to use')
+    parser.add_argument('--semantic_embedding_provider', type=str,
+                       choices=['openai', 'bge_m3', 'nvembed_v2', 'sentence_transformers'],
+                       default='bge_m3',
+                       help='Embedding provider for semantic chunking')
+    parser.add_argument('--semantic_embedding_model', type=str, default='/data/models/bge-m3',
+                       help='Embedding model name for semantic chunking')
+    parser.add_argument('--semantic_threshold_type', type=str,
+                       choices=['percentile', 'gradient', 'interquartile', 'standard_deviation'],
+                       default='percentile',
+                       help='Threshold type for semantic chunking')
+    parser.add_argument('--semantic_threshold_amount', type=float, default=75.0,
+                       help='Threshold amount for semantic chunking (lower values = more chunks)')
+    parser.add_argument('--semantic_buffer_size', type=int, default=1,
+                       help='Buffer size for semantic chunking')
+    parser.add_argument('--semantic_min_chunk_size', type=int, default=50,
+                       help='Minimum chunk size for semantic chunking')
+    parser.add_argument('--semantic_max_chunk_size', type=int, default=2000,
+                       help='Maximum chunk size for semantic chunking')
     
     return parser.parse_args()
 
@@ -149,6 +176,11 @@ def main():
         logger.info(f"  文本转换chunk大小: {args.text_conversion_chunk_size}")
         logger.info(f"  文本转换重叠大小: {args.text_conversion_overlap}")
         logger.info(f"  文本转换详细程度: {args.text_conversion_detail_level}")
+    logger.info(f"  语义分块启用: {args.enable_semantic_chunking}")
+    if args.enable_semantic_chunking:
+        logger.info(f"  分块策略: {args.chunking_strategy}")
+        logger.info(f"  语义嵌入提供商: {args.semantic_embedding_provider}")
+        logger.info(f"  语义嵌入模型: {args.semantic_embedding_model}")
     logger.info(f"  LLM模型: {args.llm_model_name}")
     logger.info(f"  嵌入模型: {args.embedding_model_name}")
     
@@ -187,6 +219,17 @@ def main():
     config.text_conversion_chunk_size = args.text_conversion_chunk_size
     config.text_conversion_overlap = args.text_conversion_overlap
     config.text_conversion_detail_level = args.text_conversion_detail_level
+
+    # 设置语义分块配置
+    config.enable_semantic_chunking = args.enable_semantic_chunking
+    config.chunking_strategy = args.chunking_strategy
+    config.semantic_embedding_provider = args.semantic_embedding_provider
+    config.semantic_embedding_model = args.semantic_embedding_model
+    config.semantic_threshold_type = args.semantic_threshold_type
+    config.semantic_threshold_amount = args.semantic_threshold_amount
+    config.semantic_buffer_size = args.semantic_buffer_size
+    config.semantic_min_chunk_size = args.semantic_min_chunk_size
+    config.semantic_max_chunk_size = args.semantic_max_chunk_size
 
     # Startup a HippoRAG instance
     logger.info("初始化 HippoRAG 实例...")

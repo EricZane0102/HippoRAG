@@ -35,6 +35,13 @@ from .utils.embed_utils import retrieve_knn
 from .utils.typing import Triple
 from .utils.config_utils import BaseConfig
 
+# 导入文本处理模块
+try:
+    from .text_processing import SemanticChunker, ChunkingConfig, ChunkingStrategy, EmbeddingProvider, ThresholdType
+    TEXT_PROCESSING_AVAILABLE = True
+except ImportError:
+    TEXT_PROCESSING_AVAILABLE = False
+
 logger = logging.getLogger(__name__)
 
 class HippoRAG:
@@ -177,6 +184,86 @@ class HippoRAG:
 
         self.ent_node_to_chunk_ids = None
 
+        # 初始化文本分块器
+        self.text_chunker = self._initialize_text_chunker()
+
+
+    def _initialize_text_chunker(self):
+        """初始化文本分块器"""
+        if not TEXT_PROCESSING_AVAILABLE:
+            logger.warning("文本处理模块不可用，将使用传统分块方法")
+            return None
+        
+        # 检查是否启用语义分块
+        if (hasattr(self.global_config, 'enable_semantic_chunking') and 
+            self.global_config.enable_semantic_chunking and 
+            self.global_config.chunking_strategy == "semantic"):
+            
+            try:
+                # 创建语义分块配置
+                chunking_config = self._create_chunking_config()
+                
+                # 初始化语义分块器
+                chunker = SemanticChunker(chunking_config)
+                logger.info("语义分块器初始化成功")
+                return chunker
+                
+            except Exception as e:
+                logger.error(f"语义分块器初始化失败: {str(e)}")
+                logger.warning("将使用传统分块方法")
+                return None
+        else:
+            logger.debug("未启用语义分块，使用传统分块方法")
+            return None
+    
+    def _create_chunking_config(self) -> 'ChunkingConfig':
+        """根据HippoRAG配置创建分块配置"""
+        from .text_processing.config import SemanticChunkingConfig
+        
+        # 映射嵌入提供商
+        provider_mapping = {
+            "openai": EmbeddingProvider.OPENAI,
+            "bge_m3": EmbeddingProvider.BGE_M3,
+            "nvembed_v2": EmbeddingProvider.NVEMBED_V2,
+            "sentence_transformers": EmbeddingProvider.SENTENCE_TRANSFORMERS
+        }
+        
+        # 映射阈值类型
+        threshold_mapping = {
+            "percentile": ThresholdType.PERCENTILE,
+            "gradient": ThresholdType.GRADIENT,
+            "interquartile": ThresholdType.INTERQUARTILE,
+            "standard_deviation": ThresholdType.STANDARD_DEVIATION
+        }
+        
+        # 创建语义分块配置
+        semantic_config = SemanticChunkingConfig(
+            embedding_provider=provider_mapping.get(
+                self.global_config.semantic_embedding_provider, 
+                EmbeddingProvider.OPENAI
+            ),
+            embedding_model_name=self.global_config.semantic_embedding_model,
+            threshold_type=threshold_mapping.get(
+                self.global_config.semantic_threshold_type,
+                ThresholdType.PERCENTILE
+            ),
+            threshold_amount=self.global_config.semantic_threshold_amount,
+            sentence_buffer_size=self.global_config.semantic_buffer_size,
+            min_chunk_size=self.global_config.semantic_min_chunk_size,
+            max_chunk_size=self.global_config.semantic_max_chunk_size,
+            batch_size=self.global_config.embedding_batch_size
+        )
+        
+        # 创建主配置
+        chunking_config = ChunkingConfig(
+            strategy=ChunkingStrategy.SEMANTIC,
+            semantic_config=semantic_config,
+            strip_whitespace=True,
+            remove_empty_chunks=True
+        )
+        
+        return chunking_config
+
 
     def initialize_graph(self):
         """
@@ -241,12 +328,15 @@ class HippoRAG:
 
         logger.info(f"Indexing Documents")
 
+        # 应用文本分块（如果启用）
+        processed_docs = self._apply_text_chunking(docs)
+
         logger.info(f"Performing OpenIE")
 
         if self.global_config.openie_mode == 'offline':
-            self.pre_openie(docs)
+            self.pre_openie(processed_docs)
 
-        self.chunk_embedding_store.insert_strings(docs)
+        self.chunk_embedding_store.insert_strings(processed_docs)
         chunk_to_rows = self.chunk_embedding_store.get_all_id_to_rows()
 
         all_openie_info, chunk_keys_to_process = self.load_existing_openie(chunk_to_rows.keys())
@@ -291,6 +381,46 @@ class HippoRAG:
             self.augment_graph()
             self.save_igraph()
 
+    def _apply_text_chunking(self, docs: List[str]) -> List[str]:
+        """
+        应用文本分块处理。
+        
+        Args:
+            docs: 原始文档列表
+            
+        Returns:
+            List[str]: 处理后的文档列表（可能被分块）
+        """
+        if self.text_chunker is None:
+            # 未启用语义分块，直接返回原文档
+            logger.debug("未使用文本分块器，保持原文档")
+            return docs
+        
+        try:
+            logger.info(f"开始语义分块处理 {len(docs)} 个文档")
+            
+            # 批量分块处理
+            chunk_results = self.text_chunker.batch_chunk_texts(docs)
+            
+            # 收集所有分块
+            all_chunks = []
+            total_original_chunks = len(docs)
+            total_new_chunks = 0
+            
+            for result in chunk_results:
+                all_chunks.extend(result.chunks)
+                total_new_chunks += len(result.chunks)
+            
+            logger.info(f"语义分块完成: {total_original_chunks} 个原始文档 → {total_new_chunks} 个分块")
+            logger.info(f"平均每个文档分成 {total_new_chunks/total_original_chunks:.1f} 个块")
+            
+            return all_chunks
+            
+        except Exception as e:
+            logger.error(f"语义分块处理失败: {str(e)}")
+            logger.warning("回退到原始文档")
+            return docs
+
     def index_with_tables(self, docs: List[str], content_types: List[str]):
         """
         索引包含表格的文档。根据content_type区分文本和表格段落进行不同处理。
@@ -321,10 +451,15 @@ class HippoRAG:
                 table_docs.append(doc)
                 table_indices.append(i)
         
-        # 先处理文本段落（使用现有流程）
+        # 先处理文本段落（使用现有流程，包含语义分块）
         if text_docs:
             logger.info(f"处理文本段落...")
-            self.chunk_embedding_store.insert_strings(text_docs)
+            
+            # 应用文本分块（如果启用语义分块）
+            processed_text_docs = self._apply_text_chunking(text_docs)
+            logger.info(f"文本分块处理完成: {len(text_docs)} 个原始文档 → {len(processed_text_docs)} 个处理后文档")
+            
+            self.chunk_embedding_store.insert_strings(processed_text_docs)
             chunk_to_rows = self.chunk_embedding_store.get_all_id_to_rows()
             
             all_openie_info, chunk_keys_to_process = self.load_existing_openie(chunk_to_rows.keys())

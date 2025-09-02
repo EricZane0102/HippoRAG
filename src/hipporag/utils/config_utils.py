@@ -262,6 +262,57 @@ class BaseConfig:
     )
     
     
+    # Text chunking specific attributes
+    enable_semantic_chunking: bool = field(
+        default=False,
+        metadata={"help": "是否启用语义分块，默认使用传统分块"}
+    )
+    
+    chunking_strategy: Literal["semantic", "fixed", "adaptive"] = field(
+        default="fixed",
+        metadata={"help": "分块策略：semantic(语义分块)、fixed(固定分块)、adaptive(自适应分块)"}
+    )
+    
+    # Semantic chunking specific attributes
+    semantic_embedding_provider: Literal["openai", "bge_m3", "nvembed_v2", "sentence_transformers"] = field(
+        default="bge_m3",
+        metadata={"help": "语义分块使用的嵌入模型提供商"}
+    )
+    
+    semantic_embedding_model: str = field(
+        default="/data/models/bge-m3",
+        metadata={"help": "语义分块使用的嵌入模型名称"}
+    )
+    
+    semantic_threshold_type: Literal["percentile", "gradient", "interquartile", "standard_deviation"] = field(
+        default="percentile",
+        metadata={"help": "语义分块阈值类型"}
+    )
+    
+    semantic_threshold_amount: float = field(
+        default=95.0,
+        metadata={"help": "语义分块阈值数值"}
+    )
+    
+    semantic_buffer_size: int = field(
+        default=1,
+        metadata={"help": "语义分块句子缓冲区大小"}
+    )
+    
+    semantic_min_chunk_size: int = field(
+        default=50,
+        metadata={"help": "语义分块最小块大小（字符数）"}
+    )
+    
+    semantic_max_chunk_size: Optional[int] = field(
+        default=None,
+        metadata={"help": "语义分块最大块大小限制（字符数）"}
+    )
+    
+    # Fixed chunking specific attributes (existing preprocessing attributes can be reused)
+    # These are already defined above: preprocess_chunk_max_token_size, preprocess_chunk_overlap_token_size
+    
+    
     def __post_init__(self):
         if self.save_dir is None: # If save_dir not given
             if self.dataset is None: self.save_dir = 'outputs' # running freely
